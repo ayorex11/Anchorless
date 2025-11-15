@@ -1,5 +1,5 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes 
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -12,14 +12,17 @@ from .serializers import (
     UserLoginSerializer, 
     ChangePasswordSerializer,
     ForgotPasswordSerializer,
-    ResetPasswordSerializer
+    ResetPasswordSerializer,
+    LogoutSerializer
 )
 from django.core.mail import send_mail
 from django.conf import settings
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 @swagger_auto_schema(methods=['POST'], request_body=UserRegistrationSerializer)
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.AllowAny])
 def register(request):
     serializer = UserRegistrationSerializer(data=request.data)
@@ -59,6 +62,7 @@ def register(request):
 
 @swagger_auto_schema(methods=['POST'], request_body=UserLoginSerializer)
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.AllowAny])
 def login(request):
     serializer = UserLoginSerializer(data=request.data)
@@ -96,11 +100,18 @@ def login(request):
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+@swagger_auto_schema(methods=['POST'], request_body=LogoutSerializer)
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.IsAuthenticated])
 def logout(request):
+    serializer = LogoutSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    validated_data = serializer.validated_data
     try:
-        refresh_token = request.data["refresh"]
+        refresh_token = validated_data['refresh']
         token = RefreshToken(refresh_token)
         token.blacklist()
         
@@ -109,6 +120,7 @@ def logout(request):
         return Response({"error": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.AllowAny])
 def verify_email(request, token):
     try:
@@ -138,6 +150,7 @@ def verify_email(request, token):
 
 @swagger_auto_schema(methods=['POST'], request_body=ForgotPasswordSerializer)
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.AllowAny])
 def forgot_password(request):
     serializer = ForgotPasswordSerializer(data=request.data)
@@ -187,6 +200,7 @@ def forgot_password(request):
 
 @swagger_auto_schema(methods=['POST'], request_body=ResetPasswordSerializer)
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.AllowAny])
 def reset_password(request):
     serializer = ResetPasswordSerializer(data=request.data)
@@ -229,6 +243,7 @@ def reset_password(request):
 
 @swagger_auto_schema(methods=['POST'], request_body=ChangePasswordSerializer)
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.IsAuthenticated])
 def change_password(request):
     serializer = ChangePasswordSerializer(data=request.data)
@@ -261,6 +276,7 @@ def change_password(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([permissions.IsAuthenticated])
 def profile(request):
     user = request.user

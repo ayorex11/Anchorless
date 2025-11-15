@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_yasg',
     'Account',
+    'DebtPlan',
 ]
 
 MIDDLEWARE = [
@@ -149,9 +150,6 @@ REST_FRAMEWORK = {
         'user': '30/hour',
         'user_burst': '5/minute',  
         'user_sustained': '15/hour',
-        'dj_rest_auth': '1000/day',  
-        'login': '10/minute',
-        'registration': '5/hour',
     }
 }
 
