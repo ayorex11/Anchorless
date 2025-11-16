@@ -40,5 +40,6 @@ urlpatterns = [
     path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
     path('auth/', include('Account.urls')),
     path('DebtPlan/', include('DebtPlan.urls')),
+    path('Loan/', include('Loan.urls')),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 ]
