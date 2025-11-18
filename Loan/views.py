@@ -9,24 +9,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from .models import Loan
 from DebtPlan.models import DebtPlan
 from .serializers import LoanSerializer
-
-def recalculate_all_payoff_orders(debt_plan):
-    """
-    Recalculate payoff orders for all loans in a debt plan
-    This ensures consistency when loans are added, removed, or updated
-    """
-    loans = Loan.objects.filter(debt_plan=debt_plan)
-    
-    if debt_plan.strategy == 'snowball':
-        sorted_loans = sorted(loans, key=lambda x: x.remaining_balance)
-    else:  # avalanche
-        sorted_loans = sorted(loans, key=lambda x: x.interest_rate, reverse=True)
-    
-    for order, loan in enumerate(sorted_loans, start=1):
-        loan.payoff_order = order
-        loan.save()
-    
-    return len(sorted_loans)
+from .utils.services import recalculate_all_payoff_orders
 
 @swagger_auto_schema(methods=['POST'], request_body=LoanSerializer)
 @api_view(['POST'])

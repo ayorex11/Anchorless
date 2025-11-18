@@ -50,6 +50,8 @@ INSTALLED_APPS = [
     'Account',
     'DebtPlan',
     'Loan',
+    'Payment',
+    'PaymentSchedule',
 ]
 
 MIDDLEWARE = [
