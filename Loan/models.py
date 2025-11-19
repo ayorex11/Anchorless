@@ -2,6 +2,8 @@ from django.db import models
 import uuid
 from Account.models import CustomUser
 from DebtPlan.models import DebtPlan
+from rest_framework.validators import ValidationError
+
 class Loan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='loans')
@@ -26,3 +28,20 @@ class Loan(models.Model):
     
     def __str__(self):
         return f"{self.name} - ${self.principal_balance}"
+    
+    def clean(self):
+        if self.remaining_balance > self.principal_balance:
+            raise ValidationError("Remaining balance cannot exceed principal balance")
+        
+        if self.minimum_payment and self.minimum_payment <= 0:
+            raise ValidationError("Minimum payment must be positive")
+        
+        if self.interest_rate < 0:
+            raise ValidationError("Interest rate cannot be negative")
+        
+        if self.remaining_balance < 0:
+            raise ValidationError("Remaining balance cannot be negative")
+    
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)

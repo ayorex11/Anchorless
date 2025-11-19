@@ -13,6 +13,15 @@ def calculate_minimum_payment(principal, interest_rate, months=None):
     Calculate minimum monthly payment for a loan
     If months not specified, use 2% of principal as baseline
     """
+    if principal <= 0:
+        raise ValueError("Principal must be positive")
+    
+    if interest_rate < 0:
+        raise ValueError("Interest rate cannot be negative")
+    
+    if months is not None and months <= 0:
+        raise ValueError("Months must be positive")
+
     if months:
         monthly_rate = (interest_rate / 100) / 12
         if monthly_rate == 0:
@@ -57,6 +66,11 @@ def generate_payment_schedule(debt_plan):
     
     if not loans:
         return None
+    
+    for loan in loans:
+
+        if loan.interest_rate < 0:
+            raise ValueError(f"Loan {loan.name} has negative interest rate")
     
     # Calculate total minimum payments
     total_minimum = sum(loan.minimum_payment or Decimal('0') for loan in loans)
