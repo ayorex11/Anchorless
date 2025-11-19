@@ -3,6 +3,7 @@ from .models import DebtPlan
 
 
 class DebtPlanSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField()
     monthly_payment_budget = serializers.DecimalField(
         max_digits=10, 
         decimal_places=2,

@@ -4,6 +4,7 @@ from DebtPlan.models import DebtPlan
 
 
 class LoanSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField()
     debt_plan = serializers.PrimaryKeyRelatedField(
         queryset=DebtPlan.objects.all(),
         required=True

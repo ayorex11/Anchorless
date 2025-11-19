@@ -31,7 +31,9 @@ class DebtPlan(models.Model):
         max_digits=10, 
         decimal_places=2, 
         default=0,
-        validators=[MinValueValidator(Decimal('0.00'))]
+        validators=[MinValueValidator(Decimal('0.00'))],
+        null=True,
+        blank=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -53,8 +55,6 @@ class DebtPlan(models.Model):
         if self.monthly_payment_budget <= 0:
             errors['monthly_payment_budget'] = "Monthly payment budget must be positive"
         
-        if self.total_interest_saved < 0:
-            errors['total_interest_saved'] = "Total interest saved cannot be negative"
         
         # Check for multiple active plans
         if self.is_active:
