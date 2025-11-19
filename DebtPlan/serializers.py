@@ -18,7 +18,7 @@ class DebtPlanSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'user', 'projected_payoff_date', 'total_interest_saved', 
-            'created_at', 'updated_at'
+            'created_at', 'updated_at', 'is_active'
         ]
     
     def validate_monthly_payment_budget(self, value):
@@ -51,7 +51,7 @@ class UpdateDebtPlanSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = DebtPlan
-        fields = ['name', 'monthly_payment_budget', 'strategy']
+        fields = ['name', 'monthly_payment_budget']
     
     def validate_monthly_payment_budget(self, value):
         """Validate monthly payment budget is positive"""
