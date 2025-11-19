@@ -1,16 +1,82 @@
 from rest_framework import serializers
 from .models import Payment
+from Loan.models import Loan
+from DebtPlan.models import DebtPlan
+
 
 class PaymentSerializer(serializers.ModelSerializer):
     loan_name = serializers.CharField(source='loan.name', read_only=True)
-    debt_plan_name = serializers.CharField(source='debt_plan.name', read_only=True)
+    user = serializers.SerializerMethodField()
+    principal_paid = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        read_only=True
+    )
+    interest_paid = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        read_only=True
+    )
+    payment_method_display = serializers.CharField(
+        source='get_payment_method_display', 
+        read_only=True
+    )
     
     class Meta:
         model = Payment
         fields = [
-            'id', 'user', 'loan', 'loan_name', 'debt_plan', 'debt_plan_name',
-            'amount', 'payment_date', 'is_extra_payment', 'is_below_minimum',
-            'created_at'
+            'id', 'loan', 'loan_name', 'debt_plan', 'amount', 
+            'payment_date', 'payment_method', 'payment_method_display',
+            'is_extra_payment', 'is_below_minimum',
+            'month_number', 'notes', 'confirmation_number',
+            'principal_paid', 'interest_paid',
+            'user', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'is_extra_payment', 'is_below_minimum']
-
+        read_only_fields = [
+            'id', 'is_extra_payment', 'is_below_minimum', 
+            'month_number', 'created_at', 'updated_at'
+        ]
+    
+    def get_user(self, obj):
+        return obj.user.email if obj.user else None
+    
+    def validate_loan(self, value):
+        """Ensure user can only add payments to their own loans"""
+        request = self.context.get('request')
+        if request and value.user != request.user:
+            raise serializers.ValidationError(
+                "Cannot add payment to another user's loan"
+            )
+        return value
+    
+    def validate_debt_plan(self, value):
+        """Ensure user can only add payments to their own debt plans"""
+        request = self.context.get('request')
+        if request and value.user != request.user:
+            raise serializers.ValidationError(
+                "Cannot add payment to another user's debt plan"
+            )
+        return value
+    
+    def validate_payment_method(self, value):
+        """Validate payment method is valid"""
+        valid_methods = [choice[0] for choice in Payment.PAYMENT_METHOD_CHOICES]
+        if value not in valid_methods:
+            raise serializers.ValidationError(
+                f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
+            )
+        return value
+    
+    def validate(self, attrs):
+        """Cross-field validation"""
+        loan = attrs.get('loan')
+        debt_plan = attrs.get('debt_plan')
+        
+        # Ensure loan belongs to debt plan
+        if loan and debt_plan:
+            if loan.debt_plan_id != debt_plan.id:
+                raise serializers.ValidationError({
+                    'loan': 'This loan does not belong to the specified debt plan'
+                })
+        
+        return attrs
