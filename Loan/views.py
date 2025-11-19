@@ -35,10 +35,10 @@ def validate_minimum_payment_settings(manually_set, minimum_payment):
 
 
 @swagger_auto_schema(methods=['POST'], request_body=LoanSerializer)
-@throttle_classes([AnonRateThrottle, UserRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
-@permission_classes([IsAuthenticated])
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
+@permission_classes([IsAuthenticated])
+@parser_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_loan(request):
     """
@@ -148,7 +148,6 @@ def create_loan(request):
         )
     
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def list_loans(request):
@@ -175,7 +174,6 @@ def list_loans(request):
 
 
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def get_loan(request, loan_id):
@@ -200,10 +198,10 @@ def get_loan(request, loan_id):
 
 
 @swagger_auto_schema( methods=['PATCH'], request_body=LoanUpdateSerializer)
-@throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
-@permission_classes([IsAuthenticated])
 @api_view(['PATCH'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
+@permission_classes([IsAuthenticated])
+@parser_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def update_loan(request, loan_id):
     """Update a loan"""
@@ -250,7 +248,6 @@ def update_loan(request, loan_id):
 
 
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
 @permission_classes([IsAuthenticated])
 @api_view(['DELETE'])
 @transaction.atomic

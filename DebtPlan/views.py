@@ -15,7 +15,6 @@ from Loan.utils.services import generate_payment_schedule
 
 
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def list_debt_plans(request):
@@ -27,10 +26,10 @@ def list_debt_plans(request):
 
 
 @swagger_auto_schema(methods=['POST'], request_body=DebtPlanSerializer)
-@throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
-@permission_classes([IsAuthenticated])
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
+@permission_classes([IsAuthenticated])
+@parser_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_debt_plan(request):
     """Create a new debt plan"""
@@ -76,7 +75,6 @@ def create_debt_plan(request):
 
 
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def get_debt_plan(request, plan_id):
@@ -101,10 +99,10 @@ def get_debt_plan(request, plan_id):
 
 
 @swagger_auto_schema(methods=['PATCH'], request_body=UpdateDebtPlanSerializer)
-@throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
-@permission_classes([IsAuthenticated])
 @api_view(['PATCH'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
+@permission_classes([IsAuthenticated])
+@parser_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def update_debt_plan(request, plan_id):
     """Update an existing debt plan"""

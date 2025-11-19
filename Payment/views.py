@@ -15,10 +15,10 @@ from Loan.utils.services import record_payment
 
 
 @swagger_auto_schema(methods=['POST'],request_body=PaymentSerializer)
-@throttle_classes([UserRateThrottle, AnonRateThrottle])
-@parser_classes([FormParser, MultiPartParser])
-@permission_classes([IsAuthenticated])
 @api_view(['POST'])
+@throttle_classes([UserRateThrottle, AnonRateThrottle])
+@permission_classes([IsAuthenticated])
+@parser_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_payment(request):
     """Record a new payment"""
