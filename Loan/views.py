@@ -19,21 +19,6 @@ from Loan.utils.services import(
 )
 
 
-def validate_minimum_payment_settings(manually_set, minimum_payment):
-    """
-    Validate minimum payment configuration
-    Returns tuple: (is_valid, error_message)
-    """
-    if manually_set:
-        if minimum_payment is None or minimum_payment <= 0:
-            return False, 'When manually setting minimum payment, value must be positive'
-    else:
-        if minimum_payment is not None and minimum_payment > 0:
-            return False, 'Cannot provide minimum_payment when manually_set_minimum_payment is False'
-    
-    return True, None
-
-
 @swagger_auto_schema(methods=['POST'], request_body=LoanSerializer)
 @api_view(['POST'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
@@ -52,8 +37,8 @@ def create_loan(request):
     
     validated_data = serializer.validated_data
     
-    # Extract and validate data
-    debt_plan_id = validated_data.get('debt_plan')
+
+    debt_plan = validated_data['debt_plan']  
     name = validated_data['name']
     principal_balance = validated_data['principal_balance']
     interest_rate = validated_data['interest_rate']
@@ -61,33 +46,8 @@ def create_loan(request):
     minimum_payment = validated_data.get('minimum_payment')
     due_date = validated_data.get('due_date', 1)
     
-    # Validate principal balance
-    if principal_balance <= 0:
-        return Response(
-            {'principal_balance': 'Principal balance must be positive'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # Validate interest rate
-    if interest_rate < 0:
-        return Response(
-            {'interest_rate': 'Interest rate cannot be negative'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # Validate minimum payment settings
-    is_valid, error_msg = validate_minimum_payment_settings(
-        manually_set_minimum_payment, 
-        minimum_payment
-    )
-    if not is_valid:
-        return Response(
-            {'minimum_payment': error_msg}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
     # Calculate minimum payment if not manually set
-    if not manually_set_minimum_payment:
+    if not manually_set_minimum_payment or minimum_payment is None:
         try:
             minimum_payment = calculate_minimum_payment(principal_balance, interest_rate)
         except DjangoValidationError as e:
@@ -96,25 +56,11 @@ def create_loan(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
-    # Verify debt plan exists and belongs to user
-    try:
-        debt_plan = DebtPlan.objects.get(id=debt_plan_id, user=user)
-    except DebtPlan.DoesNotExist:
-        return Response(
-            {'debt_plan': 'Debt plan not found'}, 
-            status=status.HTTP_404_NOT_FOUND
-        )
-    except Exception:
-        return Response(
-            {'debt_plan': 'Invalid debt plan ID'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
     # Create the loan
     try:
         loan = Loan.objects.create(
             user=user,
-            debt_plan=debt_plan,
+            debt_plan=debt_plan, 
             name=name,
             principal_balance=principal_balance,
             interest_rate=interest_rate,
@@ -124,6 +70,7 @@ def create_loan(request):
             manually_set_minimum_payment=manually_set_minimum_payment,
         )
         
+
         recalculate_all_payoff_orders(debt_plan)
         generate_payment_schedule(debt_plan)
         
@@ -133,7 +80,7 @@ def create_loan(request):
             debt_plan.save(update_fields=['is_active'])
         
         # Return the created loan data
-        response_serializer = LoanSerializer(loan)
+        response_serializer = LoanSerializer(loan, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         
     except DjangoValidationError as e:
@@ -146,7 +93,8 @@ def create_loan(request):
             {'error': f'Failed to create loan: {str(e)}'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-    
+
+
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
@@ -165,11 +113,16 @@ def list_loans(request):
                 {'error': 'Debt plan not found'}, 
                 status=status.HTTP_404_NOT_FOUND
             )
+        except Exception:
+            return Response(
+                {'error': 'Invalid debt plan ID format'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
     else:
         # Get all user's loans
         loans = Loan.objects.filter(user=user).order_by('-created_at')
     
-    serializer = LoanSerializer(loans, many=True)
+    serializer = LoanSerializer(loans, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -193,11 +146,11 @@ def get_loan(request, loan_id):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    serializer = LoanSerializer(loan)
+    serializer = LoanSerializer(loan, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@swagger_auto_schema( methods=['PATCH'], request_body=LoanUpdateSerializer)
+@swagger_auto_schema(methods=['PATCH'], request_body=LoanUpdateSerializer)
 @api_view(['PATCH'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
@@ -243,7 +196,7 @@ def update_loan(request, loan_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
-    response_serializer = LoanSerializer(updated_loan)
+    response_serializer = LoanSerializer(updated_loan, context={'request': request})
     return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 

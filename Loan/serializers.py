@@ -7,8 +7,10 @@ class LoanSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField()
     debt_plan = serializers.PrimaryKeyRelatedField(
         queryset=DebtPlan.objects.all(),
-        required=True
+        required=True,
+        pk_field=serializers.UUIDField(format='hex_verbose')
     )
+
     
     class Meta:
         model = Loan
