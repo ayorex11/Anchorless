@@ -74,6 +74,14 @@ class LoanSerializer(serializers.ModelSerializer):
         
         return attrs
 
+class GetLoanSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField()
+    debt_plan = serializers.StringRelatedField()
+
+    class Meta:
+        model = Loan
+        fields = '__all__'
+
 
 class LoanUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating loan details"""
@@ -105,3 +113,11 @@ class LoanUpdateSerializer(serializers.ModelSerializer):
             })
         
         return attrs
+    
+
+class LoanFilterSerializer(serializers.Serializer):
+    """Serializer for filtering Loan by debt plan"""
+    debt_plan = serializers.UUIDField(
+        required=False,
+        help_text="Filter loan by debt plan UUID"
+    )

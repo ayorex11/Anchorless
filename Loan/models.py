@@ -62,7 +62,7 @@ class Loan(models.Model):
         ]
     
     def __str__(self):
-        return f"{self.name} - ${self.principal_balance}"
+        return self.name
     
     def clean(self):
         """Validate loan data"""

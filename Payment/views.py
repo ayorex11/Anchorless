@@ -8,11 +8,11 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import Payment
-from .serializers import PaymentSerializer
+from .serializers import PaymentSerializer, PaymentFilterSerializer, PaymentSummaryFilterSerializer
 from Loan.models import Loan
 from DebtPlan.models import DebtPlan
 from Loan.utils.services import record_payment
-
+from django.db.models import Sum, Count
 
 @swagger_auto_schema(methods=['POST'],request_body=PaymentSerializer)
 @api_view(['POST'])
@@ -83,6 +83,7 @@ def create_payment(request):
         )
 
 
+@swagger_auto_schema(methods=['GET'], query_serializer=PaymentFilterSerializer)
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
@@ -90,7 +91,7 @@ def list_payments(request):
     """List all payments for the authenticated user with optional filtering"""
     user = request.user
     
-    # Optional filtering
+
     loan_id = request.query_params.get('loan')
     debt_plan_id = request.query_params.get('debt_plan')
     payment_method = request.query_params.get('payment_method')
@@ -114,19 +115,19 @@ def list_payments(request):
     if end_date:
         payments = payments.filter(payment_date__lte=end_date)
     
+    
     payments = payments.order_by('-payment_date', '-created_at')
     
     serializer = PaymentSerializer(payments, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+@swagger_auto_schema(methods=['GET'], query_serializer=PaymentSummaryFilterSerializer)
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def payment_summary_by_method(request):
     """Get summary of payments grouped by payment method"""
-    from django.db.models import Sum, Count
-    
     user = request.user
     debt_plan_id = request.query_params.get('debt_plan')
     
@@ -140,7 +141,6 @@ def payment_summary_by_method(request):
         payment_count=Count('id')
     ).order_by('-total_amount')
     
-    # Add display names
     for item in summary:
         item['payment_method_display'] = dict(Payment.PAYMENT_METHOD_CHOICES).get(
             item['payment_method'], 

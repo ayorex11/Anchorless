@@ -10,7 +10,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from drf_yasg.utils import swagger_auto_schema
 
 from .models import Loan
-from .serializers import LoanSerializer, LoanUpdateSerializer
+from .serializers import LoanSerializer, LoanUpdateSerializer, LoanFilterSerializer, GetLoanSerializer
 from DebtPlan.models import DebtPlan
 from Loan.utils.services import(
     generate_payment_schedule,
@@ -95,6 +95,7 @@ def create_loan(request):
         )
 
 
+@swagger_auto_schema(methods=['GET'], query_serializer=LoanFilterSerializer)
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
@@ -122,7 +123,7 @@ def list_loans(request):
         # Get all user's loans
         loans = Loan.objects.filter(user=user).order_by('-created_at')
     
-    serializer = LoanSerializer(loans, many=True, context={'request': request})
+    serializer = GetLoanSerializer(loans, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 

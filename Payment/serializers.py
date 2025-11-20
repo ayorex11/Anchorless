@@ -80,3 +80,35 @@ class PaymentSerializer(serializers.ModelSerializer):
                 })
         
         return attrs
+    
+class PaymentFilterSerializer(serializers.Serializer):
+    """Serializer for filtering payments in list view"""
+    loan = serializers.UUIDField(
+        required=False,
+        help_text="Filter by loan UUID"
+    )
+    debt_plan = serializers.UUIDField(
+        required=False,
+        help_text="Filter by debt plan UUID"
+    )
+    payment_method = serializers.ChoiceField(
+        choices=Payment.PAYMENT_METHOD_CHOICES,
+        required=False,
+        help_text="Filter by payment method"
+    )
+    start_date = serializers.DateField(
+        required=False,
+        help_text="Filter payments from this date (YYYY-MM-DD)"
+    )
+    end_date = serializers.DateField(
+        required=False,
+        help_text="Filter payments until this date (YYYY-MM-DD)"
+    )
+
+
+class PaymentSummaryFilterSerializer(serializers.Serializer):
+    """Serializer for filtering payment summary"""
+    debt_plan = serializers.UUIDField(
+        required=False,
+        help_text="Filter summary by debt plan UUID"
+    )
