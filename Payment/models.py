@@ -8,6 +8,7 @@ import uuid
 from Account.models import CustomUser
 from Loan.models import Loan
 from DebtPlan.models import DebtPlan
+from PaymentSchedule.models import PaymentSchedule
 
 
 class Payment(models.Model):
@@ -33,6 +34,15 @@ class Payment(models.Model):
         DebtPlan, 
         on_delete=models.CASCADE, 
         related_name='payments'
+    )
+
+    payment_schedule = models.ForeignKey(
+        PaymentSchedule,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='actual_payments',
+        help_text="The scheduled month this payment fulfills"
     )
     
     # Payment Details
@@ -66,6 +76,7 @@ class Payment(models.Model):
         indexes = [
             models.Index(fields=['loan', 'payment_date']),
             models.Index(fields=['debt_plan', 'payment_date']),
+            models.Index(fields=['payment_schedule']),
             models.Index(fields=['payment_method']),
             models.Index(fields=['-payment_date']),
         ]

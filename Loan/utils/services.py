@@ -246,6 +246,9 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
     
     Returns:
         tuple: (Payment instance, bool indicating if schedule was recalculated)
+    
+    Raises:
+        DjangoValidationError: If validation fails
     """
     # Lock the loan to prevent race conditions
     loan = Loan.objects.select_for_update().get(id=loan.id)
@@ -271,47 +274,60 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
             debt_plan.created_at.date(), 
             payment_date
         )
-    except DjangoValidationError:
-        month_number = None
+    except DjangoValidationError as e:
+        # Payment date is before plan started
+        raise DjangoValidationError(
+            f"Cannot record payment: {str(e)}"
+        )
     
-    # Get expected payment for this month
-    expected_payment = loan.minimum_payment  # Default
+    # Get expected payment for this month AND the schedule object
+    expected_payment = loan.minimum_payment
+    payment_schedule = None
     
     if month_number:
         try:
-            current_schedule = PaymentSchedule.objects.get(
+            payment_schedule = PaymentSchedule.objects.get(
                 debt_plan=debt_plan,
                 month_number=month_number
             )
             loan_schedule = LoanPaymentSchedule.objects.get(
-                payment_schedule=current_schedule,
+                payment_schedule=payment_schedule,
                 loan=loan
             )
             expected_payment = loan_schedule.payment_amount
-        except (PaymentSchedule.DoesNotExist, LoanPaymentSchedule.DoesNotExist):
-            pass  # Use default minimum_payment
+        except PaymentSchedule.DoesNotExist:
+            # No schedule exists for this month yet
+            pass
+        except LoanPaymentSchedule.DoesNotExist:
+            # Schedule exists but this loan isn't in it
+            pass
     
-    # Calculate interest and principal
+    # Calculate interest and principal based on CURRENT balance
     monthly_interest_rate = (loan.interest_rate / Decimal('100')) / Decimal('12')
     monthly_interest = (loan.remaining_balance * monthly_interest_rate).quantize(Decimal('0.01'))
     
-    # Validate payment covers interest (prevents negative amortization)
+    # Validate payment covers at least the interest
     if amount < monthly_interest:
         raise DjangoValidationError(
             f"Payment of ${amount} is less than interest charge of ${monthly_interest}. "
-            f"Minimum payment needed: ${monthly_interest}"
+            f"Minimum payment needed to avoid negative amortization: ${monthly_interest}. "
+            f"Consider increasing your payment to at least ${loan.minimum_payment}."
         )
     
     principal_paid = amount - monthly_interest
     
     # Determine payment classification
-    is_extra = amount > expected_payment
+    is_extra = amount > expected_payment if expected_payment else amount > loan.minimum_payment
     is_below = amount < loan.minimum_payment
     
-    # Create payment record
+    # Store the payment_schedule_id before potential regeneration
+    original_schedule_id = payment_schedule.id if payment_schedule else None
+    
+    # Create payment record with link to schedule
     payment = Payment.objects.create(
         loan=loan,
         debt_plan=debt_plan,
+        payment_schedule=payment_schedule,
         amount=amount,
         payment_date=payment_date,
         payment_method=payment_method,
@@ -329,15 +345,28 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
     
     # Determine if schedule needs recalculation
     should_recalculate = (
-        is_below or  # Payment below minimum changes the plan
-        is_extra or  # Extra payment accelerates payoff
-        loan.remaining_balance == 0 or  # Loan paid off
-        abs(amount - expected_payment) > Decimal('10.00')  # Significant deviation
+        is_below or
+        is_extra or
+        loan.remaining_balance == 0 or
+        abs(amount - expected_payment) > Decimal('10.00')
     )
     
     if should_recalculate:
         recalculate_all_payoff_orders(debt_plan)
         generate_payment_schedule(debt_plan)
+        
+        # Relink payment to new schedule for same month
+        if original_schedule_id and month_number:
+            try:
+                new_schedule = PaymentSchedule.objects.get(
+                    debt_plan=debt_plan,
+                    month_number=month_number
+                )
+                payment.payment_schedule = new_schedule
+                payment.save(update_fields=['payment_schedule'])
+            except PaymentSchedule.DoesNotExist:
+                pass
+        
         check_if_plan_completed(debt_plan)
     
     return payment, should_recalculate

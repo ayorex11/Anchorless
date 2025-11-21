@@ -1,30 +1,152 @@
 from rest_framework import serializers
 from .models import PaymentSchedule, LoanPaymentSchedule
 
+
+class DebtPlanQuerySerializer(serializers.Serializer):
+    """Query params: just debt_plan UUID"""
+    debt_plan = serializers.UUIDField(
+        required=True,
+        help_text="Debt plan UUID"
+    )
+
+
+class PaymentScheduleDetailQuerySerializer(serializers.Serializer):
+    """Query params: debt_plan + month_number"""
+    debt_plan = serializers.UUIDField(
+        required=True,
+        help_text="Debt plan UUID"
+    )
+    month_number = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        help_text="Month number (1, 2, 3...)"
+    )
+
+
+# Response serializers
 class LoanPaymentScheduleSerializer(serializers.ModelSerializer):
-    loan_name = serializers.CharField(source='loan.name', read_only=True)
+    """Breakdown for one loan in one month"""
     loan_id = serializers.UUIDField(source='loan.id', read_only=True)
+    loan_name = serializers.CharField(source='loan.name', read_only=True)
+    loan_payoff_order = serializers.IntegerField(source='loan.payoff_order', read_only=True)
+    has_payment = serializers.BooleanField(read_only=True)
+    actual_payment_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = LoanPaymentSchedule
         fields = [
-            'id', 'loan_id', 'loan_name', 'payment_amount',
-            'interest_amount', 'principal_amount', 'remaining_balance',
-            'is_focus_loan'
+            'id',
+            'loan_id',
+            'loan_name',
+            'loan_payoff_order',
+            'payment_amount',
+            'interest_amount',
+            'principal_amount',
+            'remaining_balance',
+            'is_focus_loan',
+            'has_payment',
+            'actual_payment_amount'
         ]
 
-class PaymentScheduleSerializer(serializers.ModelSerializer):
-    loan_breakdowns = LoanPaymentScheduleSerializer(many=True, read_only=True)
-    focus_loan_name = serializers.CharField(
-        source='focus_loan.name',
-        read_only=True,
-        allow_null=True
-    )
+
+class PaymentScheduleSummarySerializer(serializers.ModelSerializer):
+    """Simple list view - no loan breakdown"""
+    focus_loan_name = serializers.CharField(source='focus_loan.name', read_only=True)
     
     class Meta:
         model = PaymentSchedule
         fields = [
-            'id', 'debt_plan', 'month_number', 'focus_loan',
-            'focus_loan_name', 'total_payment', 'total_interest',
-            'total_principal', 'loan_breakdowns'
+            'id',
+            'month_number',
+            'focus_loan_name',
+            'total_payment',
+            'total_interest',
+            'total_principal',
+            'created_at'
         ]
+
+
+class PaymentScheduleSerializer(serializers.ModelSerializer):
+    """Detailed view with loan-by-loan breakdown"""
+    loan_breakdowns = LoanPaymentScheduleSerializer(many=True, read_only=True)
+    focus_loan_id = serializers.UUIDField(source='focus_loan.id', read_only=True)
+    focus_loan_name = serializers.CharField(source='focus_loan.name', read_only=True)
+    debt_plan_name = serializers.CharField(source='debt_plan.name', read_only=True)
+    
+    class Meta:
+        model = PaymentSchedule
+        fields = [
+            'id',
+            'debt_plan_name',
+            'month_number',
+            'focus_loan_id',
+            'focus_loan_name',
+            'total_payment',
+            'total_interest',
+            'total_principal',
+            'loan_breakdowns',
+            'created_at'
+        ]
+
+
+class PaymentScheduleWithProgressSerializer(serializers.ModelSerializer):
+    """Timeline view with completion tracking"""
+    focus_loan_name = serializers.CharField(source='focus_loan.name', read_only=True)
+    
+    # Progress properties
+    has_payments = serializers.BooleanField(read_only=True)
+    total_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    is_fully_paid = serializers.BooleanField(read_only=True)
+    payment_deficit = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    payment_surplus = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    completion_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    latest_payment_date = serializers.DateField(read_only=True)
+    payment_count = serializers.SerializerMethodField()
+    
+    def get_payment_count(self, obj):
+        return obj.actual_payments.count()
+    
+    class Meta:
+        model = PaymentSchedule
+        fields = [
+            'id',
+            'month_number',
+            'focus_loan_name',
+            'total_payment',
+            'total_interest',
+            'total_principal',
+            # Progress tracking
+            'has_payments',
+            'total_paid',
+            'is_fully_paid',
+            'payment_deficit',
+            'payment_surplus',
+            'completion_percentage',
+            'latest_payment_date',
+            'payment_count',
+            'created_at'
+        ]
+
+
+class ProgressSerializer(serializers.Serializer):
+    """Master progress dashboard data"""
+    # Overall metrics
+    total_months = serializers.IntegerField()
+    completed_months = serializers.IntegerField()
+    months_remaining = serializers.IntegerField()
+    current_month_number = serializers.IntegerField()
+    progress_percentage = serializers.DecimalField(max_digits=5, decimal_places=2)
+    
+    # Debt totals
+    total_debt_original = serializers.CharField()  # String to avoid precision issues
+    total_debt_remaining = serializers.CharField()
+    total_debt_paid = serializers.CharField()
+    
+    # Plan details
+    projected_payoff_date = serializers.DateField()
+    total_interest_to_pay = serializers.CharField()
+    strategy = serializers.CharField()
+    monthly_payment_budget = serializers.CharField()
+    
+    # Per-loan breakdown (ordered by payoff_order)
+    loans = serializers.ListField(child=serializers.DictField())

@@ -42,5 +42,6 @@ urlpatterns = [
     path('DebtPlan/', include('DebtPlan.urls')),
     path('Loan/', include('Loan.urls')),
     path('Payment/', include('Payment.urls')),
+    path('PaymentSchedule/', include('PaymentSchedule.urls')),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 ]
