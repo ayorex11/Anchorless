@@ -213,6 +213,14 @@ def generate_payment_schedule(debt_plan):
     debt_plan.projected_payoff_date = projected_date
     debt_plan.total_interest_saved = total_interest_paid
     debt_plan.save(update_fields=['projected_payoff_date', 'total_interest_saved'])
+
+    try:
+        from accountability_helpers.utils.pdf_generator import save_payment_plan_pdf
+        save_payment_plan_pdf(debt_plan)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to generate PDF for debt plan {debt_plan.id}: {str(e)}")
     
     return month_number - 1
 
@@ -452,6 +460,22 @@ def check_if_plan_completed(debt_plan):
     if all_paid and debt_plan.is_active:
         debt_plan.is_active = False
         debt_plan.save(update_fields=['is_active'])
+
+        try:
+            from accountability_helpers.models import LetterToSelf
+            from accountability_helpers.tasks import send_completion_letter
+            
+            letter = LetterToSelf.objects.get(debt_plan=debt_plan, is_sent=False)
+            # Queue the email to be sent
+            send_completion_letter.delay(letter.id)
+        except LetterToSelf.DoesNotExist:
+            # No letter exists, that's fine
+            pass
+        except Exception as e:
+            # Log error but don't fail
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send completion letter: {str(e)}")
         return True
     
     return False
