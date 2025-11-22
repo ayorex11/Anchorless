@@ -29,7 +29,7 @@ def list_debt_plans(request):
 @api_view(['POST'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-@parser_classes([FormParser, MultiPartParser])
+#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_debt_plan(request):
     """Create a new debt plan"""
@@ -102,7 +102,7 @@ def get_debt_plan(request, plan_id):
 @api_view(['PATCH'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-@parser_classes([FormParser, MultiPartParser])
+#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def update_debt_plan(request, plan_id):
     """Update an existing debt plan"""

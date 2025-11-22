@@ -23,7 +23,7 @@ from Loan.utils.services import(
 @api_view(['POST'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-@parser_classes([FormParser, MultiPartParser])
+#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_loan(request):
     """
@@ -155,7 +155,7 @@ def get_loan(request, loan_id):
 @api_view(['PATCH'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-@parser_classes([FormParser, MultiPartParser])
+#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def update_loan(request, loan_id):
     """Update a loan"""

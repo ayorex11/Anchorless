@@ -132,7 +132,7 @@ def download_pdf(request, pdf_id):
 @api_view(['POST'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-@parser_classes([FormParser, MultiPartParser])
+#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_letter(request):
     """Create letter to self"""
@@ -205,7 +205,7 @@ def get_letter(request):
 @api_view(['PATCH'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-@parser_classes([FormParser, MultiPartParser])
+#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def update_letter(request, letter_id):
     """Update letter to self"""

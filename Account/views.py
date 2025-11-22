@@ -13,7 +13,8 @@ from .serializers import (
     ChangePasswordSerializer,
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
-    LogoutSerializer
+    LogoutSerializer,
+    EmailResendSerializer
 )
 from django.core.mail import send_mail
 from django.conf import settings
@@ -289,3 +290,105 @@ def profile(request):
         "created_at": user.created_at,
         "updated_at": user.updated_at
     }, status=status.HTTP_200_OK)
+
+
+@swagger_auto_schema(methods=['POST'], request_body=EmailResendSerializer)
+@api_view(['POST'])
+@throttle_classes([AnonRateThrottle]) 
+@permission_classes([permissions.AllowAny])
+def resend_verification_email(request):
+    """
+    Resend verification email to unverified users
+    """
+    serializer = EmailResendSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors)
+    validated_data = serializer.validated_data
+    email = validated_data['email']
+    
+    if not email:
+        return Response(
+            {"error": "Email is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        user = CustomUser.objects.get(email=email)
+        
+        # Check if user is already verified
+        if user.is_verified:
+            return Response(
+                {"error": "Email is already verified"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check for existing non-expired token
+        existing_token = VerificationToken.objects.filter(user=user).first()
+        
+        if existing_token:
+            # Check if the existing token was created recently (within last 5 minutes)
+            time_since_creation = timezone.now() - existing_token.created_at
+            if time_since_creation < timedelta(minutes=5):
+                remaining_seconds = (timedelta(minutes=5) - time_since_creation).seconds
+                return Response(
+                    {
+                        "error": f"Please wait {remaining_seconds} seconds before requesting another verification email"
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
+            
+            # Delete old token if it exists
+            existing_token.delete()
+        
+        # Create new verification token
+        expires_at = timezone.now() + timedelta(hours=24)
+        verification_token = VerificationToken.objects.create(
+            user=user,
+            expires_at=expires_at
+        )
+        
+        # Send verification email
+        verification_url = f"http://localhost:3000/verify-email/{verification_token.token}/"
+        
+        try:
+            send_mail(
+                'Verify Your Account - Anchorless',
+                f"""
+Hello {user.first_name or user.email},
+
+Thank you for registering with Anchorless!
+
+Please verify your email address to complete your registration and start managing your debt freedom journey.
+
+Click the link below to verify your account:
+{verification_url}
+
+This link will expire in 24 hours.
+
+If you didn't create an account with Anchorless, please ignore this email.
+
+Best regards,
+The Anchorless Team
+                """,
+                settings.DEFAULT_FROM_EMAIL,
+                [user.email],
+                fail_silently=False,
+            )
+            
+            return Response({
+                "message": "Verification email sent successfully. Please check your inbox."
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            # Log the error but don't expose details to user
+            print(f"Email sending failed: {str(e)}")
+            return Response(
+                {"error": "Failed to send verification email. Please try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    except CustomUser.DoesNotExist:
+        # Don't reveal whether email exists or not for security
+        return Response({
+            "message": "If an unverified account exists with this email, a verification link has been sent."
+        }, status=status.HTTP_200_OK)
