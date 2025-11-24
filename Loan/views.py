@@ -17,6 +17,7 @@ from Loan.utils.services import(
     recalculate_all_payoff_orders,
     calculate_minimum_payment,
 )
+from DebtPlan.models import DebtPlan
 
 
 @swagger_auto_schema(methods=['POST'], request_body=LoanSerializer)
@@ -55,8 +56,6 @@ def create_loan(request):
                 {'error': str(e)}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-    
-    # Create the loan
     try:
         loan = Loan.objects.create(
             user=user,
@@ -183,6 +182,23 @@ def update_loan(request, loan_id):
     
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    validated_data = serializer.validated_data
+    manually_set_minimum_payment = validated_data.get('manually_set_minimum_payment', False)
+    minimum_payment = validated_data.get('minimum_payment')
+    principal_balance = loan.principal_balance
+    interest_rate = loan.interest_rate
+
+
+
+    if not manually_set_minimum_payment or minimum_payment is None:
+        try:
+            minimum_payment = calculate_minimum_payment(principal_balance, interest_rate)
+        except DjangoValidationError as e:
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
     
     updated_loan = serializer.save()
     
