@@ -157,7 +157,7 @@ def get_loan(request, loan_id):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    serializer = LoanSerializer(loan, context={'request': request})
+    serializer = GetLoanSerializer(loan, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
