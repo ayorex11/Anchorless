@@ -68,7 +68,7 @@ def create_loan(request):
             else :
                 suggestion = "Your budget is already fully utilized by existing loans. You must increase your monthly budget to add new debts."
             return Response({
-                'error': f'Cannot add this loan. Total minimum payments (${new_total_minimum}) would exceed your monthly budget (${debt_plan.monthly_payment_budget}).',
+                'error': f'Cannot add this loan. Total minimum payments (${new_total_minimum}) would exceed your monthly budget (${debt_plan.monthly_payment_budget}). {suggestion}',
                 'current_minimum': str(current_total_minimum),
                 'new_loan_minimum': str(minimum_payment),
                 'total_needed': str(new_total_minimum),
