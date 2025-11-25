@@ -14,7 +14,6 @@ from Loan.models import Loan
 from Loan.utils.services import generate_payment_schedule
 
 
-@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def list_debt_plans(request):

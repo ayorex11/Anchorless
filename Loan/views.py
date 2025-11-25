@@ -24,7 +24,6 @@ from DebtPlan.models import DebtPlan
 @api_view(['POST'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_loan(request):
     """
@@ -38,8 +37,11 @@ def create_loan(request):
     
     validated_data = serializer.validated_data
     
+    try:
+        debt_plan = DebtPlan.objects.select_for_update().get(pk=validated_data['debt_plan'].pk)
+    except DebtPlan.DoesNotExist:
+        return Response({'error': 'Debt plan not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    debt_plan = validated_data['debt_plan']  
     name = validated_data['name']
     principal_balance = validated_data['principal_balance']
     interest_rate = validated_data['interest_rate']
@@ -47,16 +49,33 @@ def create_loan(request):
     minimum_payment = validated_data.get('minimum_payment')
     due_date = validated_data.get('due_date', 1)
     
-    # Calculate minimum payment if not manually set
     if not manually_set_minimum_payment or minimum_payment is None:
         try:
             minimum_payment = calculate_minimum_payment(principal_balance, interest_rate)
         except DjangoValidationError as e:
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
     try:
+        current_loans = Loan.objects.filter(debt_plan=debt_plan, remaining_balance__gt=0)
+        current_total_minimum = sum(loan.minimum_payment for loan in current_loans)
+        new_total_minimum = current_total_minimum + minimum_payment
+        
+
+        if debt_plan.monthly_payment_budget < new_total_minimum:
+            wiggle_space = debt_plan.monthly_payment_budget - current_total_minimum
+            if wiggle_space > 0:
+                suggestion = f"Increase your monthly budget or manually set the minimum payment for this loan to ${wiggle_space} or lower."
+            else :
+                suggestion = "Your budget is already fully utilized by existing loans. You must increase your monthly budget to add new debts."
+            return Response({
+                'error': f'Cannot add this loan. Total minimum payments (${new_total_minimum}) would exceed your monthly budget (${debt_plan.monthly_payment_budget}).',
+                'current_minimum': str(current_total_minimum),
+                'new_loan_minimum': str(minimum_payment),
+                'total_needed': str(new_total_minimum),
+                'current_budget': str(debt_plan.monthly_payment_budget),
+                'suggestion': suggestion,
+            }, status=status.HTTP_400_BAD_REQUEST)    
+
         loan = Loan.objects.create(
             user=user,
             debt_plan=debt_plan, 
@@ -68,34 +87,26 @@ def create_loan(request):
             remaining_balance=principal_balance,
             manually_set_minimum_payment=manually_set_minimum_payment,
         )
-        
 
         recalculate_all_payoff_orders(debt_plan)
         generate_payment_schedule(debt_plan)
         
-        # Activate the debt plan
         if not debt_plan.is_active:
             debt_plan.is_active = True
             debt_plan.save(update_fields=['is_active'])
         
-        # Return the created loan data
         response_serializer = LoanSerializer(loan, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         
     except DjangoValidationError as e:
-        return Response(
-            {'error': str(e)}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response(
             {'error': f'Failed to create loan: {str(e)}'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-
 @swagger_auto_schema(methods=['GET'], query_serializer=LoanFilterSerializer)
-@throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def list_loans(request):
@@ -260,7 +271,10 @@ def delete_loan(request, loan_id):
         else:
             # No loans left, deactivate plan
             debt_plan.is_active = False
+            debt_plan.projected_payoff_date = None
+            debt_plan.total_interest_saved = 0
             debt_plan.save(update_fields=['is_active'])
+            
     
     return Response(
         {'message': f'Loan "{loan_name}" deleted successfully'}, 
