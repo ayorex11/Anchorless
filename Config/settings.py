@@ -154,9 +154,9 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/day',
-        'user': '30/hour',
-        'user_burst': '5/minute',  
-        'user_sustained': '15/hour',
+        'user': '100/hour',
+        'user_burst': '10/minute',  
+        'user_sustained': '30/hour',
     }
 }
 
