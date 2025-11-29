@@ -50,8 +50,18 @@ class LoanPaymentScheduleSerializer(serializers.ModelSerializer):
 
 
 class PaymentScheduleSummarySerializer(serializers.ModelSerializer):
-    """Simple list view - no loan breakdown"""
+    """Simple list view with payment status"""
     focus_loan_name = serializers.CharField(source='focus_loan.name', read_only=True)
+    
+    has_payments = serializers.BooleanField(read_only=True)
+    total_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    is_fully_paid = serializers.BooleanField(read_only=True)
+    payment_deficit = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    completion_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    
+    is_current_month = serializers.SerializerMethodField()
+    is_past_month = serializers.SerializerMethodField()
+    is_future_month = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentSchedule
@@ -62,8 +72,43 @@ class PaymentScheduleSummarySerializer(serializers.ModelSerializer):
             'total_payment',
             'total_interest',
             'total_principal',
+            'has_payments',
+            'total_paid',
+            'is_fully_paid',
+            'payment_deficit',
+            'completion_percentage',
+            'is_current_month',
+            'is_past_month',
+            'is_future_month',
             'created_at'
         ]
+    
+    def _get_current_month_number(self, debt_plan):
+        """Helper to calculate current month number (cached per request)"""
+        if not hasattr(self, '_current_month_cache'):
+            from datetime import datetime
+            created_date = debt_plan.created_at
+            current_date = datetime.now()
+            self._current_month_cache = (
+                (current_date.year - created_date.year) * 12 + 
+                (current_date.month - created_date.month) + 1
+            )
+        return self._current_month_cache
+    
+    def get_is_current_month(self, obj):
+        """Check if this is the current payment month"""
+        current_month = self._get_current_month_number(obj.debt_plan)
+        return obj.month_number == current_month
+    
+    def get_is_past_month(self, obj):
+        """Check if this month has passed"""
+        current_month = self._get_current_month_number(obj.debt_plan)
+        return obj.month_number < current_month
+    
+    def get_is_future_month(self, obj):
+        """Check if this month is in the future"""
+        current_month = self._get_current_month_number(obj.debt_plan)
+        return obj.month_number > current_month
 
 
 class PaymentScheduleSerializer(serializers.ModelSerializer):
