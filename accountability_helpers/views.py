@@ -102,12 +102,12 @@ def get_pdf_info(request):
 @api_view(['GET'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-def download_pdf(request, pdf_id):
+def download_pdf(request, debt_plan_id):
     """Download PDF file"""
     user = request.user
     
     try:
-        pdf_plan = PaymentPlanPDF.objects.get(id=pdf_id, user=user)
+        pdf_plan = PaymentPlanPDF.objects.get(debt_plan=debt_plan_id, user=user)
         
         if not pdf_plan.pdf_file:
             raise Http404("PDF file not found")
