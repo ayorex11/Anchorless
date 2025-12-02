@@ -4,7 +4,7 @@ from DebtPlan.models import DebtPlan
 from Loan.models import Loan
 from decimal import Decimal
 from django.core.validators import MinValueValidator
-
+from django.db.models import Sum
 
 class PaymentSchedule(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -124,16 +124,40 @@ class LoanPaymentSchedule(models.Model):
     def __str__(self):
         return f"{self.loan.name}: ${self.payment_amount}"
     
-    @property
-    def has_payment(self):
-        """Check if this specific loan has a payment for this month"""
-        return self.payment_schedule.actual_payments.filter(loan=self.loan).exists()
     
     @property
     def actual_payment_amount(self):
         """Get the actual amount paid for this loan in this schedule"""
-        from django.db.models import Sum
         result = self.payment_schedule.actual_payments.filter(
             loan=self.loan
         ).aggregate(total=Sum('amount'))['total']
         return result if result is not None else Decimal('0.00')
+    
+    @property
+    def get_total_paid(self):
+        """Get total payments made for this loan in this schedule"""
+        from Payment.models import Payment
+        payments = Payment.objects.filter(
+            payment_schedule=self.payment_schedule,
+            loan=self.loan
+        ).aggregate(total=Sum('amount'))
+        return payments['total'] or Decimal('0')
+    
+    @property
+    def payment_deficit(self):
+        """Calculate remaining amount to pay"""
+        if not self.payment_amount:
+            return Decimal('0')
+        total_paid = self.get_total_paid
+        deficit = self.payment_amount - total_paid
+        return max(deficit, Decimal('0'))
+    
+    @property
+    def has_payment(self):
+        """Check if any payment has been made"""
+        return self.get_total_paid > Decimal('0')
+    
+    @property
+    def is_fully_paid(self):
+        """Check if fully paid"""
+        return self.payment_deficit == Decimal('0')

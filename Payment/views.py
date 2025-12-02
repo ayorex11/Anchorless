@@ -37,6 +37,7 @@ def create_payment(request):
     payment_method = validated_data.get('payment_method', 'bank_transfer')
     notes = validated_data.get('notes', '')
     confirmation_number = validated_data.get('confirmation_number', '')
+    month_number = validated_data.get('month_number', None)
     
     # Verify ownership
     try:
@@ -62,7 +63,8 @@ def create_payment(request):
             payment_date=payment_date,
             payment_method=payment_method,
             notes=notes,
-            confirmation_number=confirmation_number
+            confirmation_number=confirmation_number,
+            month_number = month_number
         )
         
         response_serializer = PaymentSerializer(payment)

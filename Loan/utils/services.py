@@ -239,7 +239,7 @@ def get_month_number(plan_start_date, payment_date):
 
 @transaction.atomic
 def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_transfer', 
-                   notes='', confirmation_number=''):
+                   notes='', confirmation_number='', month_number=None):
     """
     Record a payment and determine if schedule needs recalculation
     
@@ -260,6 +260,7 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
     """
     # Lock the loan to prevent race conditions
     loan = Loan.objects.select_for_update().get(id=loan.id)
+    debt_plan = DebtPlan.objects.select_for_update().get(id=debt_plan.id)
     
     # Validate payment amount
     if amount <= 0:
@@ -276,17 +277,24 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
             f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
         )
     
-    # Get current month's schedule and month number
-    try:
-        month_number = get_month_number(
-            debt_plan.created_at.date(), 
-            payment_date
-        )
-    except DjangoValidationError as e:
-        # Payment date is before plan started
-        raise DjangoValidationError(
-            f"Cannot record payment: {str(e)}"
-        )
+    if month_number:
+        current_month = get_month_number(debt_plan.created_at.date(), date.today())
+        if month_number > current_month + 1:
+            raise DjangoValidationError(
+                f"Cannot make payments more than one month ahead. "
+                f"Current month: {current_month}, Requested: {month_number}"
+            )
+    else:
+        try:
+            month_number = get_month_number(
+                debt_plan.created_at.date(), 
+                payment_date
+            )
+        except DjangoValidationError as e:
+            # Payment date is before plan started
+            raise DjangoValidationError(
+                f"Cannot record payment: {str(e)}"
+            )
     
     # Get expected payment for this month AND the schedule object
     expected_payment = loan.minimum_payment
@@ -304,7 +312,6 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
             )
             expected_payment = loan_schedule.payment_amount
         except PaymentSchedule.DoesNotExist:
-            # No schedule exists for this month yet
             pass
         except LoanPaymentSchedule.DoesNotExist:
             # Schedule exists but this loan isn't in it
@@ -320,6 +327,13 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
             f"Payment of ${amount} is less than interest charge of ${monthly_interest}. "
             f"Minimum payment needed to avoid negative amortization: ${monthly_interest}. "
             f"Consider increasing your payment to at least ${loan.minimum_payment}."
+        )
+    
+    max_allowed_payment = loan.remaining_balance + monthly_interest
+    if amount > max_allowed_payment:
+        raise DjangoValidationError(
+            f"Payment of ${amount} exceeds remaining balance plus interest "
+            f"(${max_allowed_payment}). Please adjust the payment amount."
         )
     
     principal_paid = amount - monthly_interest
@@ -364,7 +378,7 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
         generate_payment_schedule(debt_plan)
         
         # Relink payment to new schedule for same month
-        if original_schedule_id and month_number:
+        if month_number:
             try:
                 new_schedule = PaymentSchedule.objects.get(
                     debt_plan=debt_plan,
@@ -373,7 +387,9 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
                 payment.payment_schedule = new_schedule
                 payment.save(update_fields=['payment_schedule'])
             except PaymentSchedule.DoesNotExist:
-                pass
+                payment.payment_schedule = None
+                payment.save(update_fields=['payment_schedule'])
+
         
         check_if_plan_completed(debt_plan)
     

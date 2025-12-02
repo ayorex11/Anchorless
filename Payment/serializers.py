@@ -6,6 +6,7 @@ from DebtPlan.models import DebtPlan
 
 class PaymentSerializer(serializers.ModelSerializer):
     loan_name = serializers.CharField(source='loan.name', read_only=True)
+    debt_name = serializers.CharField(source='debt_plan.name', read_only=True)  
     user = serializers.SerializerMethodField()
     principal_paid = serializers.DecimalField(
         max_digits=10, 
@@ -21,11 +22,17 @@ class PaymentSerializer(serializers.ModelSerializer):
         source='get_payment_method_display', 
         read_only=True
     )
+    month_number = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        write_only=True,
+        help_text="Month number in the debt plan this payment is for (optional)"
+    )
     
     class Meta:
         model = Payment
         fields = [
-            'id', 'loan', 'loan_name', 'debt_plan', 'amount', 
+            'id', 'loan', 'loan_name', 'debt_plan', 'debt_name', 'amount', 
             'payment_date', 'payment_method', 'payment_method_display',
             'is_extra_payment', 'is_below_minimum',
             'month_number', 'notes', 'confirmation_number',
@@ -34,7 +41,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'is_extra_payment', 'is_below_minimum', 
-            'month_number', 'created_at', 'updated_at'
+            'created_at', 'updated_at'
         ]
     
     def get_user(self, obj):
@@ -80,6 +87,12 @@ class PaymentSerializer(serializers.ModelSerializer):
                 })
         
         return attrs
+    
+    def validate_month_number(self, value):
+        """Validate month number is positive"""
+        if value and value < 1:
+            raise serializers.ValidationError("Month number must be a positive integer")
+        return value
     
 class PaymentFilterSerializer(serializers.Serializer):
     """Serializer for filtering payments in list view"""
