@@ -18,16 +18,18 @@ from django.db.models import Sum, Count
 @api_view(['POST'])
 @throttle_classes([UserRateThrottle, AnonRateThrottle])
 @permission_classes([IsAuthenticated])
-#_classes([FormParser, MultiPartParser])
 @transaction.atomic
 def create_payment(request):
-    """Record a new payment"""
     user = request.user
     
+    # Validate input data
     serializer = PaymentSerializer(data=request.data, context={'request': request})
     
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            serializer.errors, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
     
     validated_data = serializer.validated_data
     loan_id = validated_data['loan'].id
@@ -39,22 +41,28 @@ def create_payment(request):
     confirmation_number = validated_data.get('confirmation_number', '')
     month_number = validated_data.get('month_number', None)
     
-    # Verify ownership
     try:
-        loan = Loan.objects.get(id=loan_id, user=user)
-        debt_plan = DebtPlan.objects.get(id=debt_plan_id, user=user)
+        # Use select_for_update to lock the records
+        loan = Loan.objects.select_for_update().get(id=loan_id, user=user)
+        debt_plan = DebtPlan.objects.select_for_update().get(id=debt_plan_id, user=user)
     except Loan.DoesNotExist:
         return Response(
-            {'error': 'Loan not found'},
+            {'error': 'Loan not found or does not belong to you'},
             status=status.HTTP_404_NOT_FOUND
         )
     except DebtPlan.DoesNotExist:
         return Response(
-            {'error': 'Debt plan not found'},
+            {'error': 'Debt plan not found or does not belong to you'},
             status=status.HTTP_404_NOT_FOUND
         )
     
-    # Record the payment using service function
+
+    if loan.debt_plan_id != debt_plan.id:
+        return Response(
+            {'error': 'Loan does not belong to the specified debt plan'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
     try:
         payment, was_recalculated = record_payment(
             debt_plan=debt_plan,
@@ -64,25 +72,50 @@ def create_payment(request):
             payment_method=payment_method,
             notes=notes,
             confirmation_number=confirmation_number,
-            month_number = month_number
+            month_number=month_number
         )
         
+        # Serialize the response
         response_serializer = PaymentSerializer(payment)
         response_data = response_serializer.data
+        
+        # Add metadata about what happened
         response_data['schedule_recalculated'] = was_recalculated
+        response_data['message'] = (
+            'Payment recorded successfully. Schedule was recalculated.' 
+            if was_recalculated 
+            else 'Payment recorded successfully.'
+        )
         
         return Response(response_data, status=status.HTTP_201_CREATED)
         
     except DjangoValidationError as e:
+        # Business logic validation errors
+        error_message = str(e)
+        
+        # Handle ValidationError dict format
+        if hasattr(e, 'error_dict'):
+            error_message = '; '.join([
+                f"{field}: {', '.join(errors)}" 
+                for field, errors in e.error_dict.items()
+            ])
+        
         return Response(
-            {'error': str(e)},
+            {'error': error_message},
             status=status.HTTP_400_BAD_REQUEST
         )
+    
     except Exception as e:
+        # Unexpected errors
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Unexpected error recording payment: {str(e)}", exc_info=True)
+        
         return Response(
-            {'error': f'Failed to record payment: {str(e)}'},
+            {'error': f'Failed to record payment: An unexpected error occurred. Please try again.'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
 
 
 @swagger_auto_schema(methods=['GET'], query_serializer=PaymentFilterSerializer)

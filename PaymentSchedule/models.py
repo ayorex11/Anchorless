@@ -6,6 +6,7 @@ from decimal import Decimal
 from django.core.validators import MinValueValidator
 from django.db.models import Sum
 
+
 class PaymentSchedule(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     debt_plan = models.ForeignKey(DebtPlan, on_delete=models.CASCADE, related_name='payment_schedules')
@@ -81,6 +82,48 @@ class PaymentSchedule(models.Model):
         """Date of the most recent payment for this schedule"""
         payment = self.actual_payments.order_by('-payment_date').first()
         return payment.payment_date if payment else None
+    
+    @property
+    def completion_status(self):
+        from Payment.models import Payment
+        """Calculate completion status with payment tracking"""
+        loan_breakdowns = self.loan_breakdowns.all()
+        if not loan_breakdowns.exists():
+            return{
+                'has_payments': False,
+                'is_fully_paid': False,
+                'total_paid': Decimal('0'),
+                'total_expected': Decimal('0'),
+                'payment_deficit': Decimal('0'),
+                'completion_percentage': 0
+            }
+        total_expected = sum(lb.payment_amount for lb in loan_breakdowns)
+        total_paid = Decimal('0')
+
+        for breakdown in loan_breakdowns:
+            payments = Payment.objects.filter(
+                payment_schedule=self,
+                loan=breakdown.loan
+            )
+            total_paid += sum(p.amount for p in payments)
+
+        deficit = max(total_expected - total_paid, Decimal('0'))
+        has_payments = total_paid > Decimal('0')
+        is_fully_paid = deficit == 0 and has_payments
+        completion_percentage = (
+        int((total_paid / total_expected * 100)) if total_expected > 0 else 0
+        )
+
+        return {
+        'has_payments': has_payments,
+        'is_fully_paid': is_fully_paid,
+        'total_paid': float(total_paid),
+        'total_expected': float(total_expected),
+        'payment_deficit': float(deficit),
+        'completion_percentage': completion_percentage
+        }
+
+
 
 
 class LoanPaymentSchedule(models.Model):
@@ -127,11 +170,13 @@ class LoanPaymentSchedule(models.Model):
     
     @property
     def actual_payment_amount(self):
-        """Get the actual amount paid for this loan in this schedule"""
-        result = self.payment_schedule.actual_payments.filter(
+        from Payment.models import Payment
+        """Get sum of actual payments made for this loan in this schedule"""
+        payments = Payment.objects.filter(
+            payment_schedule=self.payment_schedule,
             loan=self.loan
-        ).aggregate(total=Sum('amount'))['total']
-        return result if result is not None else Decimal('0.00')
+        )
+        return sum(p.amount for p in payments)
     
     @property
     def get_total_paid(self):
@@ -145,17 +190,13 @@ class LoanPaymentSchedule(models.Model):
     
     @property
     def payment_deficit(self):
-        """Calculate remaining amount to pay"""
-        if not self.payment_amount:
-            return Decimal('0')
-        total_paid = self.get_total_paid
-        deficit = self.payment_amount - total_paid
-        return max(deficit, Decimal('0'))
+        """How much is still owed"""
+        return max(self.payment_amount - self.actual_payment_amount, Decimal('0'))
     
     @property
     def has_payment(self):
-        """Check if any payment has been made"""
-        return self.get_total_paid > Decimal('0')
+        """Has any payment been made"""
+        return self.actual_payment_amount > 0
     
     @property
     def is_fully_paid(self):

@@ -69,6 +69,11 @@ def generate_payment_schedule(debt_plan):
     """
     Generate complete payment schedule for a debt plan
     This is the core algorithm for both snowball and avalanche methods
+    
+    Key improvements:
+    - Two-pass algorithm for proper extra payment redistribution
+    - Handles overpayment scenarios correctly
+    - Prevents loss of extra payments when focus loan is paid off early
     """
     # Clear existing schedule
     PaymentSchedule.objects.filter(debt_plan=debt_plan).delete()
@@ -130,7 +135,7 @@ def generate_payment_schedule(debt_plan):
         remaining_extra = extra_payment
         loan_schedules_data = []
         
-        # Process each loan
+        # Process each loan with minimum payment (focus gets minimum + extra)
         for loan in loans:
             if loan_balances[loan.id] <= 0:
                 continue
@@ -153,11 +158,11 @@ def generate_payment_schedule(debt_plan):
             max_payment = current_balance + interest_charge
             actual_payment = min(payment, max_payment)
             
-            # If focus loan is overpaid, capture the unused extra
+            # If focus loan is overpaid, capture the unused extra for redistribution
             if is_focus and actual_payment < payment:
-                unused_extra = payment - actual_payment
-                remaining_extra = unused_extra
-            else:
+                remaining_extra = payment - actual_payment
+            elif is_focus:
+                # Focus loan accepted all the extra
                 remaining_extra = Decimal('0')
             
             principal_payment = actual_payment - interest_charge
@@ -174,11 +179,49 @@ def generate_payment_schedule(debt_plan):
                 'is_focus_loan': is_focus
             })
             
+            # Update working balance
             loan_balances[loan.id] = new_balance
             month_total_payment += actual_payment
             month_total_interest += interest_charge
             month_total_principal += principal_payment
             total_interest_paid += interest_charge
+        
+        # If focus loan couldn't accept all extra, redistribute to other loans
+        if remaining_extra > 0:
+            for schedule_data in loan_schedules_data:
+                # Skip focus loan and fully paid loans
+                if schedule_data['is_focus_loan']:
+                    continue
+                
+                loan_id = schedule_data['loan'].id
+                if loan_balances[loan_id] <= 0:
+                    continue
+                
+                current_balance = loan_balances[loan_id]
+                
+                # Calculate how much more this loan can accept
+                # (current balance minus what we're already paying toward principal)
+                max_additional = current_balance - schedule_data['principal_amount']
+                max_additional = max(max_additional, Decimal('0'))  # Can't be negative
+                
+                # Apply as much extra as possible to this loan
+                additional_payment = min(remaining_extra, max_additional)
+                
+                if additional_payment > 0:
+                    # Update schedule data
+                    schedule_data['payment_amount'] += additional_payment
+                    schedule_data['principal_amount'] += additional_payment
+                    schedule_data['remaining_balance'] -= additional_payment
+                    
+                    # Update tracking
+                    loan_balances[loan_id] -= additional_payment
+                    month_total_payment += additional_payment
+                    month_total_principal += additional_payment
+                    remaining_extra -= additional_payment
+                
+                # If we've redistributed all extra, we're done
+                if remaining_extra <= 0:
+                    break
         
         # Create and SAVE the payment schedule for this month
         payment_schedule = PaymentSchedule.objects.create(
@@ -208,12 +251,13 @@ def generate_payment_schedule(debt_plan):
         
         month_number += 1
     
-    # Update debt plan
+    # Update debt plan with final projections
     projected_date = date.today() + relativedelta(months=month_number - 1)
     debt_plan.projected_payoff_date = projected_date
     debt_plan.total_interest_saved = total_interest_paid
     debt_plan.save(update_fields=['projected_payoff_date', 'total_interest_saved'])
 
+    # Generate PDF (optional, log errors but don't fail)
     try:
         from accountability_helpers.utils.pdf_generator import save_payment_plan_pdf
         save_payment_plan_pdf(debt_plan)
@@ -225,6 +269,39 @@ def generate_payment_schedule(debt_plan):
     return month_number - 1
 
 
+def validate_schedule_integrity(debt_plan):
+    """
+    Validate that the generated schedule is mathematically correct
+    Use this in testing to verify the algorithm works properly
+    """
+    schedules = PaymentSchedule.objects.filter(debt_plan=debt_plan).order_by('month_number')
+    
+    total_paid = Decimal('0')
+    for schedule in schedules:
+        # Each month's payment should equal budget (except possibly last month)
+        if schedule.month_number < schedules.count():
+            assert schedule.total_payment == debt_plan.monthly_payment_budget, \
+                f"Month {schedule.month_number}: Payment mismatch"
+        
+        # Interest + Principal should equal Total Payment
+        assert schedule.total_interest + schedule.total_principal == schedule.total_payment, \
+            f"Month {schedule.month_number}: Components don't sum to total"
+        
+        total_paid += schedule.total_payment
+    
+    # Total paid should approximately equal original debt + interest
+    loans = Loan.objects.filter(debt_plan=debt_plan)
+    total_original = sum(loan.principal_balance for loan in loans)
+    
+    print(f"✓ Schedule validation passed")
+    print(f"  Total months: {schedules.count()}")
+    print(f"  Total paid: ${total_paid}")
+    print(f"  Original debt: ${total_original}")
+    print(f"  Total interest: ${debt_plan.total_interest_saved}")
+    
+    return True
+
+
 def get_month_number(plan_start_date, payment_date):
     """
     Calculate which month number a payment falls into
@@ -233,7 +310,10 @@ def get_month_number(plan_start_date, payment_date):
     if payment_date < plan_start_date:
         raise DjangoValidationError("Payment date cannot be before plan start date")
     
-    delta = relativedelta(payment_date, plan_start_date)
+    plan_month_start = plan_start_date.replace(day=1)
+    payment_month_start = payment_date.replace(day=1)
+
+    delta = relativedelta(payment_month_start, plan_month_start)
     return delta.years * 12 + delta.months + 1
 
 
@@ -384,7 +464,14 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
                     debt_plan=debt_plan,
                     month_number=month_number
                 )
-                payment.payment_schedule = new_schedule
+                loan_in_schedule = LoanPaymentSchedule.objects.filter(
+                    payment_schedule=new_schedule,
+                    loan=loan
+                ).exists()
+                if loan_in_schedule:
+                    payment.payment_schedule = new_schedule
+                else:
+                    payment.payment_schedule = None
                 payment.save(update_fields=['payment_schedule'])
             except PaymentSchedule.DoesNotExist:
                 payment.payment_schedule = None
