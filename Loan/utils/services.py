@@ -7,6 +7,7 @@ from ..models import DebtPlan
 from Loan.models import Loan
 from PaymentSchedule.models import PaymentSchedule, LoanPaymentSchedule
 from Payment.models import Payment
+from django.db import models
 
 
 def calculate_minimum_payment(principal, interest_rate, months=None):
@@ -301,6 +302,206 @@ def validate_schedule_integrity(debt_plan):
     
     return True
 
+@transaction.atomic
+def regenerate_schedule_from_month(debt_plan, start_month):
+    """
+    Regenerate payment schedule starting from a specific month
+    Preserves all schedules before start_month
+    
+    Args:
+        debt_plan: DebtPlan instance
+        start_month: int, month number to start regeneration from
+    """
+    from dateutil.relativedelta import relativedelta
+    
+    # Delete only FUTURE schedules (starting from start_month)
+    PaymentSchedule.objects.filter(
+        debt_plan=debt_plan,
+        month_number__gte=start_month
+    ).delete()
+    
+    # Get all loans with remaining balance
+    loans = list(
+        Loan.objects.filter(
+            debt_plan=debt_plan,
+            remaining_balance__gt=0
+        ).order_by('payoff_order')
+    )
+    
+    if not loans:
+        debt_plan.is_active = False
+        debt_plan.save(update_fields=['is_active'])
+        return 0
+    
+    # Validate all loans
+    for loan in loans:
+        if loan.interest_rate < 0:
+            raise DjangoValidationError(f"Loan {loan.name} has negative interest rate")
+        if not loan.minimum_payment or loan.minimum_payment <= 0:
+            raise DjangoValidationError(f"Loan {loan.name} has invalid minimum payment")
+    
+    # Calculate total minimum payments
+    total_minimum = sum(loan.minimum_payment for loan in loans)
+    
+    if debt_plan.monthly_payment_budget < total_minimum:
+        raise DjangoValidationError(
+            f"Monthly budget ${debt_plan.monthly_payment_budget} is less than "
+            f"total minimum payments ${total_minimum}"
+        )
+    
+    extra_payment = debt_plan.monthly_payment_budget - total_minimum
+    
+    # Use CURRENT balances as starting point (not original balances)
+    loan_balances = {loan.id: loan.remaining_balance for loan in loans}
+    
+    month_number = start_month
+    total_interest_paid = Decimal('0')
+    
+    # Add interest from PREVIOUS months (before start_month)
+    previous_schedules = PaymentSchedule.objects.filter(
+        debt_plan=debt_plan,
+        month_number__lt=start_month
+    )
+    total_interest_paid = sum(
+        schedule.total_interest for schedule in previous_schedules
+    )
+    
+    # Same generation logic as generate_payment_schedule()
+    while any(balance > 0 for balance in loan_balances.values()):
+        if month_number > 600:
+            raise DjangoValidationError("Payment schedule exceeds 50 years")
+        
+        month_total_payment = Decimal('0')
+        month_total_interest = Decimal('0')
+        month_total_principal = Decimal('0')
+        
+        # Find focus loan
+        focus_loan = None
+        for loan in loans:
+            if loan_balances[loan.id] > 0:
+                focus_loan = loan
+                break
+        
+        remaining_extra = extra_payment
+        loan_schedules_data = []
+        
+        # Process each loan (same logic as before)
+        for loan in loans:
+            if loan_balances[loan.id] <= 0:
+                continue
+            
+            current_balance = loan_balances[loan.id]
+            monthly_interest_rate = (loan.interest_rate / Decimal('100')) / Decimal('12')
+            interest_charge = (current_balance * monthly_interest_rate).quantize(Decimal('0.01'))
+            
+            is_focus = (loan.id == focus_loan.id) if focus_loan else False
+            
+            if is_focus:
+                payment = loan.minimum_payment + remaining_extra
+            else:
+                payment = loan.minimum_payment
+            
+            max_payment = current_balance + interest_charge
+            actual_payment = min(payment, max_payment)
+            
+            if is_focus and actual_payment < payment:
+                remaining_extra = payment - actual_payment
+            elif is_focus:
+                remaining_extra = Decimal('0')
+            
+            principal_payment = actual_payment - interest_charge
+            new_balance = (current_balance - principal_payment).quantize(Decimal('0.01'))
+            new_balance = max(new_balance, Decimal('0'))
+            
+            loan_schedules_data.append({
+                'loan': loan,
+                'payment_amount': actual_payment,
+                'interest_amount': interest_charge,
+                'principal_amount': principal_payment,
+                'remaining_balance': new_balance,
+                'is_focus_loan': is_focus
+            })
+            
+            loan_balances[loan.id] = new_balance
+            month_total_payment += actual_payment
+            month_total_interest += interest_charge
+            month_total_principal += principal_payment
+            total_interest_paid += interest_charge
+        
+        # Redistribute remaining extra (same logic as before)
+        if remaining_extra > 0:
+            for schedule_data in loan_schedules_data:
+                if schedule_data['is_focus_loan']:
+                    continue
+                
+                loan_id = schedule_data['loan'].id
+                if loan_balances[loan_id] <= 0:
+                    continue
+                
+                current_balance = loan_balances[loan_id]
+                max_additional = current_balance - schedule_data['principal_amount']
+                max_additional = max(max_additional, Decimal('0'))
+                
+                additional_payment = min(remaining_extra, max_additional)
+                
+                if additional_payment > 0:
+                    schedule_data['payment_amount'] += additional_payment
+                    schedule_data['principal_amount'] += additional_payment
+                    schedule_data['remaining_balance'] -= additional_payment
+                    
+                    loan_balances[loan_id] -= additional_payment
+                    month_total_payment += additional_payment
+                    month_total_principal += additional_payment
+                    remaining_extra -= additional_payment
+                
+                if remaining_extra <= 0:
+                    break
+        
+        # Create payment schedule
+        payment_schedule = PaymentSchedule.objects.create(
+            debt_plan=debt_plan,
+            month_number=month_number,
+            total_payment=month_total_payment,
+            total_interest=month_total_interest,
+            total_principal=month_total_principal,
+            focus_loan=focus_loan
+        )
+        
+        # Create loan schedules
+        loan_schedule_objects = [
+            LoanPaymentSchedule(
+                payment_schedule=payment_schedule,
+                loan=data['loan'],
+                payment_amount=data['payment_amount'],
+                interest_amount=data['interest_amount'],
+                principal_amount=data['principal_amount'],
+                remaining_balance=data['remaining_balance'],
+                is_focus_loan=data['is_focus_loan']
+            )
+            for data in loan_schedules_data
+        ]
+        
+        LoanPaymentSchedule.objects.bulk_create(loan_schedule_objects)
+        
+        month_number += 1
+    
+    # Update debt plan projections
+    projected_date = debt_plan.created_at.date() + relativedelta(months=month_number - 1)
+    debt_plan.projected_payoff_date = projected_date
+    debt_plan.total_interest_saved = total_interest_paid
+    debt_plan.save(update_fields=['projected_payoff_date', 'total_interest_saved'])
+    
+    # Regenerate PDF
+    try:
+        from accountability_helpers.utils.pdf_generator import save_payment_plan_pdf
+        save_payment_plan_pdf(debt_plan)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to generate PDF: {str(e)}")
+    
+    return month_number - start_month
+
 
 def get_month_number(plan_start_date, payment_date):
     """
@@ -319,7 +520,7 @@ def get_month_number(plan_start_date, payment_date):
 
 @transaction.atomic
 def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_transfer', 
-                   notes='', confirmation_number='', month_number=None):
+                   notes='', confirmation_number='', month_number=None, skip_recalculation=False):
     """
     Record a payment and determine if schedule needs recalculation
     
@@ -358,11 +559,14 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
         )
     
     if month_number:
-        current_month = get_month_number(debt_plan.created_at.date(), date.today())
-        if month_number > current_month + 1:
+        max_month = PaymentSchedule.objects.filter(
+            debt_plan = debt_plan
+        ).aggregate(models.Max('month_number'))['month_number__max'] or 0
+
+        if month_number > max_month:
             raise DjangoValidationError(
-                f"Cannot make payments more than one month ahead. "
-                f"Current month: {current_month}, Requested: {month_number}"
+                f"Cannot make payments for month {month_number}. "
+                f"Schedule only goes up to month {max_month}."
             )
     else:
         try:
@@ -444,19 +648,27 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
     new_balance = loan.remaining_balance - principal_paid
     loan.remaining_balance = max(new_balance, Decimal('0')).quantize(Decimal('0.01'))
     loan.save(update_fields=['remaining_balance', 'updated_at'])
+
+    if not skip_recalculation:
+        should_recalculate = (
+            is_below or
+            is_extra or
+            loan.remaining_balance == 0 or
+            abs(amount - expected_payment) > Decimal('10.00')
+        )
     
-    # Determine if schedule needs recalculation
-    should_recalculate = (
-        is_below or
-        is_extra or
-        loan.remaining_balance == 0 or
-        abs(amount - expected_payment) > Decimal('10.00')
-    )
     
     if should_recalculate:
-        recalculate_all_payoff_orders(debt_plan)
-        generate_payment_schedule(debt_plan)
+        last_paid_month = Payment.objects.filter(
+            debt_plan = debt_plan
+        ).aggregate(models.Max('month_number'))['month_number__max'] or 0
+
+
+        current_month = get_month_number(debt_plan.created_at.date(), date.today())
+        recalculate_from_month = max(last_paid_month + 1, current_month)
         
+        recalculate_all_payoff_orders(debt_plan)
+        regenerate_schedule_from_month(debt_plan, recalculate_from_month)
         # Relink payment to new schedule for same month
         if month_number:
             try:
@@ -480,7 +692,7 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
         
         check_if_plan_completed(debt_plan)
     
-    return payment, should_recalculate
+    return payment, should_recalculate if not skip_recalculation else False
 
 
 def get_current_month_plan(debt_plan):

@@ -23,9 +23,9 @@ class PaymentSerializer(serializers.ModelSerializer):
         read_only=True
     )
     month_number = serializers.IntegerField(
-        required=False,
+        required=True,
         min_value=1,
-        write_only=True,
+        write_only=False,
         help_text="Month number in the debt plan this payment is for (optional)"
     )
     
@@ -92,6 +92,23 @@ class PaymentSerializer(serializers.ModelSerializer):
         """Validate month number is positive"""
         if value and value < 1:
             raise serializers.ValidationError("Month number must be a positive integer")
+        request = self.context.get('request')
+        debt_plan_id = self.initial_data.get('debt_plan')
+        if debt_plan_id and request:
+            from PaymentSchedule.models import PaymentSchedule
+            from DebtPlan.models import DebtPlan
+
+            try:
+                plan = DebtPlan.objects.get(id=debt_plan_id, user=request.user)
+                if not PaymentSchedule.objects.filter(
+                    debt_plan= plan,
+                    month_number = value
+                ).exists():
+                    raise serializers.ValidationError(
+                        f"Month {value } does not exist in payment schedule"
+                    )
+            except DebtPlan.DoesNotExist:
+                pass 
         return value
     
 class PaymentFilterSerializer(serializers.Serializer):
