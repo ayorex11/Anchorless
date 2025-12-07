@@ -21,7 +21,7 @@ from .serializers import (
 from DebtPlan.models import DebtPlan
 from Loan.models import Loan
 from Payment.models import Payment
-from Loan.utils.services import get_month_number
+from Loan.utils.services import get_month_number, calculate_progress, get_accurate_months_remaining
 
 
 @swagger_auto_schema(
@@ -265,20 +265,7 @@ def get_schedules_with_progress(request):
 @api_view(['GET'])
 def get_debt_progress(request):
     """
-    MASTER PROGRESS VIEW - Get everything you need for progress bars and dashboards:
-    
-    Overall Progress:
-    - Total debt (original vs remaining)
-    - Percentage paid off
-    - Months completed vs remaining
-    - Current month number
-    - Projected completion date
-    
-    Per-Loan Progress (in payoff order):
-    - Each loan's progress percentage
-    - Which loans are paid off
-    - Which loan is currently being focused on
-    - Remaining balances
+    FIXED: Master progress view with accurate calculations
     """
     user = request.user
     debt_plan_id = request.query_params.get('debt_plan')
@@ -311,10 +298,13 @@ def get_debt_progress(request):
             status=status.HTTP_404_NOT_FOUND
         )
     
-    # Calculate overall debt metrics
-    total_original = sum(loan.principal_balance for loan in loans)
-    total_remaining = sum(loan.remaining_balance for loan in loans)
-    total_paid = total_original - total_remaining
+    
+    progress = calculate_progress(debt_plan)
+    
+    # Calculate overall debt metrics (now using fixed function)
+    total_original = progress['total_original']
+    total_remaining = progress['total_remaining']
+    total_paid = progress['total_paid'] 
     
     # Get schedule information
     schedules = PaymentSchedule.objects.filter(debt_plan=debt_plan).prefetch_related('actual_payments')
@@ -322,16 +312,19 @@ def get_debt_progress(request):
     
     # Calculate current month
     try:
+        from Loan.utils.services import get_month_number
         current_month = get_month_number(debt_plan.created_at.date(), date.today())
     except DjangoValidationError:
         current_month = 1
     
     # Calculate how many months are fully completed
     completed_months = sum(1 for schedule in schedules if schedule.is_fully_paid)
-    months_remaining = total_months - completed_months
     
-    # Overall progress percentage
-    progress_percentage = (total_paid / total_original * 100) if total_original > 0 else Decimal('0')
+
+    months_remaining = get_accurate_months_remaining(debt_plan)
+    
+    # Overall progress percentage (now accurate)
+    progress_percentage = progress['progress_percentage']
     
     # Determine which loan is currently being focused on
     current_focus_loan = None
@@ -367,12 +360,12 @@ def get_debt_progress(request):
     progress_data = {
         'total_months': total_months,
         'completed_months': completed_months,
-        'months_remaining': months_remaining,
+        'months_remaining': months_remaining,  
         'current_month_number': current_month,
-        'progress_percentage': progress_percentage.quantize(Decimal('0.01')),
+        'progress_percentage': str(progress_percentage),  
         'total_debt_original': str(total_original),
         'total_debt_remaining': str(total_remaining),
-        'total_debt_paid': str(total_paid),
+        'total_debt_paid': str(total_paid),  
         'projected_payoff_date': debt_plan.projected_payoff_date,
         'total_interest_to_pay': str(debt_plan.total_interest_saved or Decimal('0')),
         'loans': loan_data,

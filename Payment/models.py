@@ -21,6 +21,13 @@ class Payment(models.Model):
         ('auto_pay', 'Automatic Payment'),
         ('other', 'Other'),
     ]
+
+
+    PAYMENT_TIMING_CHOICES = [
+        ('early', 'Early'),
+        ('on_time', 'On Time'),
+        ('late', 'Late'),
+    ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
@@ -43,6 +50,38 @@ class Payment(models.Model):
         blank=True,
         related_name='actual_payments',
         help_text="The scheduled month this payment fulfills"
+    )
+
+    interest_paid = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.00'))],
+        default=Decimal('0.00'),
+        help_text= "Interest amount calculated at time of payment"
+    )
+
+    principal_paid = models.DecimalField(
+    max_digits=10,
+    decimal_places=2,
+    validators=[MinValueValidator(Decimal('0.00'))],
+    default=Decimal('0.00'),
+    help_text="Principal amount calculated at time of payment"
+    )
+
+    balance_before_payment = models.DecimalField(
+    max_digits=10,
+    decimal_places=2,
+    validators=[MinValueValidator(Decimal('0.00'))],
+    default=Decimal('0.00'),
+    help_text="Loan balance before this payment was applied"
+    )
+
+    payment_timing = models.CharField(
+        max_length=10,
+        choices=PAYMENT_TIMING_CHOICES,
+        blank=True,
+        null=True,
+        help_text="Whether payment was made early, on-time, or late"
     )
     
     # Payment Details
@@ -124,20 +163,6 @@ class Payment(models.Model):
         """Helper property to get user from loan"""
         return self.loan.user if self.loan else None
     
-    @property
-    def principal_paid(self):
-        """Calculate how much of this payment went to principal"""
-        if not self.loan:
-            return Decimal('0')
-        
-        monthly_interest_rate = (self.loan.interest_rate / Decimal('100')) / Decimal('12')
-        interest = (self.loan.remaining_balance * monthly_interest_rate).quantize(Decimal('0.01'))
-        return max(self.amount - interest, Decimal('0'))
-    
-    @property
-    def interest_paid(self):
-        """Calculate how much of this payment went to interest"""
-        return self.amount - self.principal_paid
     
     def get_payment_method_display_name(self):
         """Get human-readable payment method name"""

@@ -28,6 +28,17 @@ class PaymentSerializer(serializers.ModelSerializer):
         write_only=False,
         help_text="Month number in the debt plan this payment is for (optional)"
     )
+
+    principal_paid = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        read_only=True  
+    )
+    interest_paid = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        read_only=True  
+    )
     
     class Meta:
         model = Payment
@@ -36,11 +47,12 @@ class PaymentSerializer(serializers.ModelSerializer):
             'payment_date', 'payment_method', 'payment_method_display',
             'is_extra_payment', 'is_below_minimum',
             'month_number', 'notes', 'confirmation_number',
-            'principal_paid', 'interest_paid',
+            'principal_paid', 'interest_paid', 'balance_before_payment',
             'user', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'is_extra_payment', 'is_below_minimum', 
+            'principal_paid', 'interest_paid', 'balance_before_payment',
             'created_at', 'updated_at'
         ]
     

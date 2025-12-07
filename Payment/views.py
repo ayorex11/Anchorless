@@ -64,6 +64,7 @@ def create_payment(request):
         )
     
     try:
+        skip_recalc = request.data.get('skip_recalculation', False)
         payment, was_recalculated = record_payment(
             debt_plan=debt_plan,
             loan=loan,
@@ -72,7 +73,8 @@ def create_payment(request):
             payment_method=payment_method,
             notes=notes,
             confirmation_number=confirmation_number,
-            month_number=month_number
+            month_number=month_number,
+            skip_recalculation= skip_recalc
         )
         
         # Serialize the response

@@ -518,118 +518,108 @@ def get_month_number(plan_start_date, payment_date):
     return delta.years * 12 + delta.months + 1
 
 
+def determine_payment_timing(payment, debt_plan):
+    """Determine if payment is early, on-time, or late"""
+    from datetime import timedelta
+    
+    current_month = get_month_number(debt_plan.created_at.date(), date.today())
+    
+    if payment.month_number > current_month:
+        return 'early'
+    elif payment.month_number < current_month:
+        return 'late'
+    else:
+        # Same month - check against loan due date
+        expected_date = debt_plan.created_at.date().replace(day=min(payment.loan.due_date, 28))
+        if payment.payment_date < expected_date - timedelta(days=3):
+            return 'early'
+        elif payment.payment_date > expected_date + timedelta(days=3):
+            return 'late'
+        else:
+            return 'on_time'
+
+
 @transaction.atomic
 def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_transfer', 
                    notes='', confirmation_number='', month_number=None, skip_recalculation=False):
     """
-    Record a payment and determine if schedule needs recalculation
-    
-    Args:
-        debt_plan: DebtPlan instance
-        loan: Loan instance
-        amount: Decimal, payment amount
-        payment_date: date object
-        payment_method: str, one of Payment.PAYMENT_METHOD_CHOICES
-        notes: str, optional notes about the payment
-        confirmation_number: str, bank confirmation or reference number
-    
-    Returns:
-        tuple: (Payment instance, bool indicating if schedule was recalculated)
-    
-    Raises:
-        DjangoValidationError: If validation fails
+    FIXED: Record a payment with proper interest calculation
     """
     # Lock the loan to prevent race conditions
     loan = Loan.objects.select_for_update().get(id=loan.id)
     debt_plan = DebtPlan.objects.select_for_update().get(id=debt_plan.id)
     
-    # Validate payment amount
+    # Validate basic requirements
     if amount <= 0:
         raise DjangoValidationError("Payment amount must be positive")
     
-    # Validate loan belongs to debt plan
     if loan.debt_plan_id != debt_plan.id:
         raise DjangoValidationError("Loan does not belong to this debt plan")
     
-    # Validate payment method
-    valid_methods = [choice[0] for choice in Payment.PAYMENT_METHOD_CHOICES]
-    if payment_method not in valid_methods:
+    # Determine month number if not provided
+    if not month_number:
+        try:
+            month_number = get_month_number(debt_plan.created_at.date(), payment_date)
+        except DjangoValidationError as e:
+            raise DjangoValidationError(f"Cannot record payment: {str(e)}")
+    
+    # Validate month exists
+    max_month = PaymentSchedule.objects.filter(
+        debt_plan=debt_plan
+    ).aggregate(models.Max('month_number'))['month_number__max'] or 0
+    
+    if month_number > max_month:
         raise DjangoValidationError(
-            f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
+            f"Cannot make payments for month {month_number}. "
+            f"Schedule only goes up to month {max_month}."
         )
     
-    if month_number:
-        max_month = PaymentSchedule.objects.filter(
-            debt_plan = debt_plan
-        ).aggregate(models.Max('month_number'))['month_number__max'] or 0
-
-        if month_number > max_month:
-            raise DjangoValidationError(
-                f"Cannot make payments for month {month_number}. "
-                f"Schedule only goes up to month {max_month}."
-            )
-    else:
-        try:
-            month_number = get_month_number(
-                debt_plan.created_at.date(), 
-                payment_date
-            )
-        except DjangoValidationError as e:
-            # Payment date is before plan started
-            raise DjangoValidationError(
-                f"Cannot record payment: {str(e)}"
-            )
-    
-    # Get expected payment for this month AND the schedule object
+    # Get expected payment
     expected_payment = loan.minimum_payment
     payment_schedule = None
     
-    if month_number:
-        try:
-            payment_schedule = PaymentSchedule.objects.get(
-                debt_plan=debt_plan,
-                month_number=month_number
-            )
-            loan_schedule = LoanPaymentSchedule.objects.get(
-                payment_schedule=payment_schedule,
-                loan=loan
-            )
-            expected_payment = loan_schedule.payment_amount
-        except PaymentSchedule.DoesNotExist:
-            pass
-        except LoanPaymentSchedule.DoesNotExist:
-            # Schedule exists but this loan isn't in it
-            pass
+    try:
+        payment_schedule = PaymentSchedule.objects.get(
+            debt_plan=debt_plan,
+            month_number=month_number
+        )
+        loan_schedule = LoanPaymentSchedule.objects.get(
+            payment_schedule=payment_schedule,
+            loan=loan
+        )
+        expected_payment = loan_schedule.payment_amount
+    except (PaymentSchedule.DoesNotExist, LoanPaymentSchedule.DoesNotExist):
+        pass
     
-    # Calculate interest and principal based on CURRENT balance
+    # *** CRITICAL FIX: Store balance BEFORE payment ***
+    balance_before_payment = loan.remaining_balance
+    
+    # Calculate interest on balance BEFORE payment (not current balance!)
     monthly_interest_rate = (loan.interest_rate / Decimal('100')) / Decimal('12')
-    monthly_interest = (loan.remaining_balance * monthly_interest_rate).quantize(Decimal('0.01'))
+    interest_charge = (balance_before_payment * monthly_interest_rate).quantize(Decimal('0.01'))
     
-    # Validate payment covers at least the interest
-    if amount < monthly_interest:
+    # Validate payment covers interest
+    if amount < interest_charge:
         raise DjangoValidationError(
-            f"Payment of ${amount} is less than interest charge of ${monthly_interest}. "
-            f"Minimum payment needed to avoid negative amortization: ${monthly_interest}. "
-            f"Consider increasing your payment to at least ${loan.minimum_payment}."
+            f"Payment of ${amount} is less than interest charge of ${interest_charge}. "
+            f"Minimum payment needed: ${interest_charge}."
         )
     
-    max_allowed_payment = loan.remaining_balance + monthly_interest
-    if amount > max_allowed_payment:
+    # Calculate principal
+    principal_paid = amount - interest_charge
+    
+    # Validate not overpaying
+    max_allowed = balance_before_payment + interest_charge
+    if amount > max_allowed:
         raise DjangoValidationError(
-            f"Payment of ${amount} exceeds remaining balance plus interest "
-            f"(${max_allowed_payment}). Please adjust the payment amount."
+            f"Payment of ${amount} exceeds remaining balance plus interest (${max_allowed})."
         )
     
-    principal_paid = amount - monthly_interest
-    
-    # Determine payment classification
+    # Determine classification
     is_extra = amount > expected_payment if expected_payment else amount > loan.minimum_payment
     is_below = amount < loan.minimum_payment
     
-    # Store the payment_schedule_id before potential regeneration
-    original_schedule_id = payment_schedule.id if payment_schedule else None
-    
-    # Create payment record with link to schedule
+    # *** CREATE PAYMENT WITH STORED VALUES ***
     payment = Payment.objects.create(
         loan=loan,
         debt_plan=debt_plan,
@@ -637,6 +627,9 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
         amount=amount,
         payment_date=payment_date,
         payment_method=payment_method,
+        interest_paid=interest_charge,  # STORED AT PAYMENT TIME
+        principal_paid=principal_paid,   # STORED AT PAYMENT TIME
+        balance_before_payment=balance_before_payment,  # STORED
         is_extra_payment=is_extra,
         is_below_minimum=is_below,
         month_number=month_number,
@@ -644,55 +637,50 @@ def record_payment(debt_plan, loan, amount, payment_date, payment_method='bank_t
         confirmation_number=confirmation_number
     )
     
+    # Set payment timing
+    payment.payment_timing = determine_payment_timing(payment, debt_plan)
+    payment.save(update_fields=['payment_timing'])
+    
     # Update loan balance
-    new_balance = loan.remaining_balance - principal_paid
+    new_balance = balance_before_payment - principal_paid
     loan.remaining_balance = max(new_balance, Decimal('0')).quantize(Decimal('0.01'))
     loan.save(update_fields=['remaining_balance', 'updated_at'])
-
+    
+    # Determine if recalculation needed
+    should_recalculate = False
     if not skip_recalculation:
+        deviation = abs(amount - expected_payment) if expected_payment else Decimal('0')
         should_recalculate = (
-            is_below or
-            is_extra or
+            deviation > Decimal('10.00') or
             loan.remaining_balance == 0 or
-            abs(amount - expected_payment) > Decimal('10.00')
+            is_below or
+            is_extra
         )
     
-    
     if should_recalculate:
-        last_paid_month = Payment.objects.filter(
-            debt_plan = debt_plan
-        ).aggregate(models.Max('month_number'))['month_number__max'] or 0
-
-
-        current_month = get_month_number(debt_plan.created_at.date(), date.today())
-        recalculate_from_month = max(last_paid_month + 1, current_month)
-        
         recalculate_all_payoff_orders(debt_plan)
-        regenerate_schedule_from_month(debt_plan, recalculate_from_month)
-        # Relink payment to new schedule for same month
-        if month_number:
-            try:
-                new_schedule = PaymentSchedule.objects.get(
-                    debt_plan=debt_plan,
-                    month_number=month_number
-                )
-                loan_in_schedule = LoanPaymentSchedule.objects.filter(
-                    payment_schedule=new_schedule,
-                    loan=loan
-                ).exists()
-                if loan_in_schedule:
-                    payment.payment_schedule = new_schedule
-                else:
-                    payment.payment_schedule = None
-                payment.save(update_fields=['payment_schedule'])
-            except PaymentSchedule.DoesNotExist:
+        regenerate_schedule_from_month(debt_plan, month_number)
+        
+        # Relink payment to new schedule
+        try:
+            new_schedule = PaymentSchedule.objects.get(
+                debt_plan=debt_plan,
+                month_number=month_number
+            )
+            if LoanPaymentSchedule.objects.filter(
+                payment_schedule=new_schedule, loan=loan
+            ).exists():
+                payment.payment_schedule = new_schedule
+            else:
                 payment.payment_schedule = None
-                payment.save(update_fields=['payment_schedule'])
-
+            payment.save(update_fields=['payment_schedule'])
+        except PaymentSchedule.DoesNotExist:
+            payment.payment_schedule = None
+            payment.save(update_fields=['payment_schedule'])
         
         check_if_plan_completed(debt_plan)
     
-    return payment, should_recalculate if not skip_recalculation else False
+    return payment, should_recalculate
 
 
 def get_current_month_plan(debt_plan):
@@ -721,8 +709,10 @@ def get_current_month_plan(debt_plan):
 
 def calculate_progress(debt_plan):
     """
-    Calculate overall progress on debt plan
+    FIXED: Calculate progress using loan balances (source of truth)
     """
+
+    
     loans = Loan.objects.filter(debt_plan=debt_plan)
     
     if not loans.exists():
@@ -737,24 +727,26 @@ def calculate_progress(debt_plan):
             'total_loans': 0
         }
     
+    # *** USE LOAN BALANCES AS SOURCE OF TRUTH ***
     total_original = sum(loan.principal_balance for loan in loans)
     total_remaining = sum(loan.remaining_balance for loan in loans)
-    total_paid = total_original - total_remaining
+    total_paid = total_original - total_remaining  # THIS IS THE TRUE AMOUNT PAID
     
+    # Get sum of all payment amounts (for reference/debugging)
+    payments = Payment.objects.filter(debt_plan=debt_plan)
+    total_payment_amounts = sum(p.amount for p in payments) if payments.exists() else Decimal('0')
+    
+    # Calculate percentage
     progress_percentage = (
         (total_paid / total_original * 100) if total_original > 0 else Decimal('0')
     )
     
-    # Get actual payments made
-    payments = Payment.objects.filter(debt_plan=debt_plan)
-    total_payments_made = sum(p.amount for p in payments) if payments.exists() else Decimal('0')
-    
     return {
         'total_original': total_original,
         'total_remaining': total_remaining,
-        'total_paid': total_paid,
+        'total_paid': total_paid, 
         'progress_percentage': round(progress_percentage, 2),
-        'total_payments_made': total_payments_made,
+        'total_payments_made': total_payment_amounts,
         'number_of_payments': payments.count(),
         'loans_paid_off': loans.filter(remaining_balance=0).count(),
         'total_loans': loans.count()
@@ -794,3 +786,36 @@ def check_if_plan_completed(debt_plan):
         return True
     
     return False
+
+
+def get_accurate_months_remaining(debt_plan):
+    """
+    FIXED: Calculate months remaining based on current schedule
+    """
+    
+    try:
+        current_month = get_month_number(debt_plan.created_at.date(), date.today())
+    except:
+        current_month = 1
+    
+    # Get schedules from current month onwards
+    remaining_schedules = PaymentSchedule.objects.filter(
+        debt_plan=debt_plan,
+        month_number__gte=current_month
+    ).order_by('month_number')
+    
+    if not remaining_schedules.exists():
+        return 0
+    
+    # Count months that still have unpaid balances
+    months_remaining = 0
+    for schedule in remaining_schedules:
+        # Check if any loan in this schedule still has balance
+        has_balance = schedule.loan_breakdowns.filter(
+            remaining_balance__gt=0
+        ).exists()
+        
+        if has_balance:
+            months_remaining += 1
+    
+    return months_remaining
